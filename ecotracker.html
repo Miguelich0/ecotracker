@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>EcoTracker 🌿</title>
+  <style>
+    :root{ --green:#2d6a4f; --light:#e8f5e9; --accent:#95d5b2; --text:#1b4332; }
+    body{ font-family: "Segoe UI", Arial, sans-serif; background:var(--light); margin:0; color:var(--text); }
+    header{ background:var(--green); color:white; padding:18px; text-align:center; }
+    main{ max-width:900px; margin:28px auto; background:white; padding:20px; border-radius:12px;
+          box-shadow:0 6px 18px rgba(0,0,0,.08); }
+    h1{ margin:0; font-size:1.6rem; }
+    .row{ display:flex; gap:18px; flex-wrap:wrap; }
+    .col{ flex:1 1 280px; min-width:240px; }
+    label{ display:block; font-weight:600; margin-top:12px; }
+    input[type="number"]{ width:100%; padding:10px; margin-top:6px; border-radius:8px; border:1px solid var(--accent); }
+    button{ background:var(--green); color:white; border:none; padding:10px 14px; border-radius:8px; cursor:pointer; font-weight:700; margin-top:14px; }
+    button.secondary{ background:#f6f6f6; color:var(--text); border:1px solid #ddd; font-weight:600; }
+    .result{ margin-top:18px; padding:14px; background:#d8f3dc; border-radius:10px; }
+    table{ width:100%; border-collapse:collapse; margin-top:14px; }
+    th,td{ padding:8px 6px; border-bottom:1px solid #eee; text-align:left; font-size:0.95rem; }
+    .small{ font-size:0.9rem; color:#555; }
+    footer{ text-align:center; padding:12px; background:var(--green); color:white; margin-top:20px; border-radius:0 0 12px 12px; }
+    canvas{ width:100%; height:160px; display:block; margin-top:10px; }
+    .controls{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🌿 EcoTracker</h1>
+    <p class="small">Track your carbon footprint — simple demo (client-side)</p>
+  </header>
+
+  <main>
+    <h2>Log your daily activities</h2>
+    <p class="small">Fill in the form and press "Calculate & Save" to store a daily entry.</p>
+
+    <div class="row">
+      <div class="col">
+        <form id="ecoForm">
+          <label for="date">📅 Date</label>
+          <input type="date" id="date" required>
+
+          <label for="transport">🚗 Kilometers traveled (car, bus, etc.)</label>
+          <input type="number" id="transport" placeholder="Example: 20" min="0" step="0.1" required>
+
+          <label for="energy">💡 Daily electricity use (kWh)</label>
+          <input type="number" id="energy" placeholder="Example: 5" min="0" step="0.1" required>
+
+          <label for="waste">🗑️ Waste produced (kg)</label>
+          <input type="number" id="waste" placeholder="Example: 1" min="0" step="0.1" required>
+
+          <div class="controls">
+            <button type="button" id="saveBtn">Calculate & Save</button>
+            <button type="button" id="clearBtn" class="secondary">Clear History</button>
+          </div>
+        </form>
+
+        <div class="result" id="result" aria-live="polite"></div>
+      </div>
+
+      <div class="col">
+        <h3>Summary</h3>
+        <p class="small">Totals and averages from saved entries.</p>
+        <ul id="summaryList">
+          <li>Total entries: <strong id="totalEntries">0</strong></li>
+          <li>Average footprint: <strong id="avgFoot">0</strong> kg CO₂/day</li>
+          <li>Total footprint: <strong id="totFoot">0</strong> kg CO₂</li>
+        </ul>
+
+        <h3>History (most recent first)</h3>
+        <div style="overflow:auto; max-height:280px;">
+          <table id="historyTable" aria-live="polite">
+            <thead><tr><th>Date</th><th>Footprint (kg CO₂)</th><th>Details</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
+        <h3>Graph</h3>
+        <canvas id="chart"></canvas>
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    <p>EcoTracker © 2025 | Software Engineering Project — Second Group</p>
+  </footer>
+
+  <script>
+    // --- Emission factors (kg CO2 per unit) ---
+    const transportFactor = 0.21; // per km
+    const energyFactor = 0.4;    // per kWh
+    const wasteFactor = 0.8;     // per kg
+
+    const STORAGE_KEY = "ecotracker_entries_v1";
+
+    // Elements
+    const dateInput = document.getElementById("date");
+    const transportInput = document.getElementById("transport");
+    const energyInput = document.getElementById("energy");
+    const wasteInput = document.getElementById("waste");
+    const saveBtn = document.getElementById("saveBtn");
+    const clearBtn = document.getElementById("clearBtn");
+    const resultDiv = document.getElementById("result");
+    const historyTableBody = document.querySelector("#historyTable tbody");
+    const totalEntriesEl = document.getElementById("totalEntries");
+    const avgFootEl = document.getElementById("avgFoot");
+    const totFootEl = document.getElementById("totFoot");
+    const canvas = document.getElementById("chart");
+
+    // Initialize date to today
+    dateInput.valueAsDate = new Date();
+
+    // Load entries from localStorage
+    function loadEntries() {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      return raw ? JSON.parse(raw) : [];
+    }
+
+    // Save entries to localStorage
+    function saveEntries(entries) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
+    }
+
+    // Calculate footprint for given numbers
+    function computeFootprint(transport, energy, waste) {
+      return (transport * transportFactor) + (energy * energyFactor) + (waste * wasteFactor);
+    }
+
+    // Render history and summary
+    function renderAll() {
+      const entries = loadEntries();
+      // Sort descending by date (most recent first)
+      entries.sort((a,b) => new Date(b.date) - new Date(a.date));
+
+      // Table
+      historyTableBody.innerHTML = "";
+      let total = 0;
+      entries.forEach(entry => {
+        total += entry.footprint;
+        const tr = document.createElement("tr");
+        const dateTd = document.createElement("td");
+        dateTd.textContent = entry.date;
+        const footTd = document.createElement("td");
+        footTd.textContent = entry.footprint.toFixed(2) + " kg";
+        const detailsTd = document.createElement("td");
+        detailsTd.textContent = `km:${entry.transport} • kWh:${entry.energy} • kg:${entry.waste}`;
+        tr.append(dateTd, footTd, detailsTd);
+        historyTableBody.appendChild(tr);
+      });
+
+      totalEntriesEl.textContent = entries.length;
+      totFootEl.textContent = total.toFixed(2);
+      avgFootEl.textContent = entries.length ? (total / entries.length).toFixed(2) : "0";
+
+      drawChart(entries);
+    }
+
+    // Draw a simple bar chart on canvas
+    function drawChart(entries) {
+      const ctx = canvas.getContext("2d");
+      // clear canvas (match CSS pixels)
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = canvas.clientWidth * dpr;
+      canvas.height = canvas.clientHeight * dpr;
+      ctx.scale(dpr, dpr);
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+
+      if (!entries.length) {
+        ctx.fillStyle = "#777";
+        ctx.font = "14px sans-serif";
+        ctx.fillText("No data to display", 10, 24);
+        return;
+      }
+
+      // show last 10 entries reversed (oldest -> newest left to right)
+      const last = entries.slice(0, 10).reverse();
+      const padding = 10;
+      const chartW = canvas.clientWidth - padding*2;
+      const chartH = canvas.clientHeight - padding*2;
+      const barWidth = chartW / last.length * 0.7;
+      const gap = (chartW / last.length) * 0.3;
+      const max = Math.max(...last.map(e => e.footprint), 1);
+
+      // axes label
+      ctx.fillStyle = "#444";
+      ctx.font = "12px sans-serif";
+
+      last.forEach((e, i) => {
+        const x = padding + i*(barWidth+gap);
+        const h = (e.footprint / max) * (chartH - 20);
+        const y = padding + (chartH - h);
+        // bar
+        ctx.fillStyle = "#2d6a4f";
+        ctx.fillRect(x, y, barWidth, h);
+        // value above bar
+        ctx.fillStyle = "#10451b";
+        ctx.font = "11px sans-serif";
+        ctx.fillText(e.footprint.toFixed(1), x, y - 6);
+        // date label
+        ctx.fillStyle = "#333";
+        ctx.font = "10px sans-serif";
+        const label = e.date.slice(5); // show MM-DD
+        ctx.fillText(label, x, canvas.clientHeight - 6);
+      });
+    }
+
+    // Handler for save
+    saveBtn.addEventListener("click", () => {
+      const date = dateInput.value;
+      const transport = parseFloat(transportInput.value) || 0;
+      const energy = parseFloat(energyInput.value) || 0;
+      const waste = parseFloat(wasteInput.value) || 0;
+
+      if (!date) {
+        alert("Please select a date.");
+        return;
+      }
+
+      // compute footprint
+      const footprint = computeFootprint(transport, energy, waste);
+
+      // entry object
+      const entry = {
+        date,
+        transport,
+        energy,
+        waste,
+        footprint
+      };
+
+      // load, add, save
+      const entries = loadEntries();
+      entries.push(entry);
+      saveEntries(entries);
+
+      // show immediate result
+      showResult(footprint);
+
+      // reset inputs? keep date as today for convenience
+      transportInput.value = "";
+      energyInput.value = "";
+      wasteInput.value = "";
+
+      // re-render
+      renderAll();
+    });
+
+    // show result message
+    function showResult(total) {
+      let message = `<h3>🌍 Your daily carbon footprint is: <strong>${total.toFixed(2)} kg CO₂</strong></h3>`;
+      if (total < 5) {
+        message += "<p>Excellent! You’re making a great effort to protect the planet. 🌱</p>";
+      } else if (total < 15) {
+        message += "<p>Good job! But you can still make small improvements. 💧</p>";
+      } else {
+        message += "<p>Your impact is high. Try using public transport and saving energy. 🚴‍♀️</p>";
+      }
+      resultDiv.innerHTML = message;
+    }
+
+    // clear history with confirmation
+    clearBtn.addEventListener("click", () => {
+      if (confirm("Clear all saved entries? This cannot be undone.")) {
+        localStorage.removeItem(STORAGE_KEY);
+        renderAll();
+        resultDiv.innerHTML = "<p class='small'>History cleared.</p>";
+      }
+    });
+
+    // initial render
+    renderAll();
+
+    // Optional: sample data (uncomment to preload example entries)
+    /*
+    if (!loadEntries().length) {
+      const sample = [
+        {date:"2025-11-10",transport:12,energy:4,waste:0.8,footprint:computeFootprint(12,4,0.8)},
+        {date:"2025-11-11",transport:5,energy:3,waste:0.5,footprint:computeFootprint(5,3,0.5)},
+      ];
+      saveEntries(sample);
+      renderAll();
+    }
+    */
+  </script>
+</body>
+</html>
